@@ -1,97 +1,127 @@
-# Python Script to Extract tweets of a
-# particular Hashtag using Tweepy and Pandas
+"""Utility for scraping tweets related to COVID-19 hashtags.
 
+This module exposes a command line interface for collecting tweets that match a
+given search query. API credentials are read from the following environment
+variables:
 
-# import modules
+- TWITTER_CONSUMER_KEY
+- TWITTER_CONSUMER_SECRET
+- TWITTER_ACCESS_TOKEN
+- TWITTER_ACCESS_TOKEN_SECRET
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from typing import List
+
 import pandas as pd
 import tweepy
 
 
-# function to display data of each tweet
-def printtweetdata(n, ith_tweet):
-	print()
-	print(f"Tweet {n}:")
-	print(f"Username:{ith_tweet[0]}")
-	print(f"Description:{ith_tweet[1]}")
-	print(f"Location:{ith_tweet[2]}")
-	print(f"Following Count:{ith_tweet[3]}")
-	print(f"Follower Count:{ith_tweet[4]}")
-	print(f"Total Tweets:{ith_tweet[5]}")
-	print(f"Retweet Count:{ith_tweet[6]}")
-	print(f"Tweet Text:{ith_tweet[7]}")
-	print(f"Hashtags Used:{ith_tweet[8]}")
+def create_api() -> tweepy.API:
+    """Create a Tweepy API instance using credentials stored in environment variables.
+
+    Raises:
+        RuntimeError: If any of the required credentials are missing.
+    """
+    consumer_key = os.getenv("TWITTER_CONSUMER_KEY")
+    consumer_secret = os.getenv("TWITTER_CONSUMER_SECRET")
+    access_token = os.getenv("TWITTER_ACCESS_TOKEN")
+    access_secret = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+
+    if not all([consumer_key, consumer_secret, access_token, access_secret]):
+        raise RuntimeError(
+            "Twitter API credentials are not fully set in environment variables."
+        )
+
+    auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
+    auth.set_access_token(access_token, access_secret)
+    return tweepy.API(auth, wait_on_rate_limit=True)
 
 
-# function to perform data extraction
-def scrape(numtweet):
-	
-	# Creating DataFrame using pandas
-	db = pd.DataFrame(columns=['username', 'description', 'location', 'following',
-							'followers', 'totaltweets', 'retweetcount', 'text', 'hashtags'])
-	
-	# We are using .Cursor() to search through twitter for the required tweets.
-	# The number of tweets can be restricted using .items(number of tweets)
-	tweets = tweepy.Cursor(api.search, \
-	q="#SayNoToVaccines -filter:retweets", lang="en",
-						tweet_mode='extended').items(numtweet)
-	
-	# .Cursor() returns an iterable object. Each item in
-	# the iterator has various attributes that you can access to
-	# get information about each tweet
-	list_tweets = [tweet for tweet in tweets]
-	
-	# Counter to maintain Tweet Count
-	i = 1
-	
-	# we will iterate over each tweet in the list for extracting information about each tweet
-	for tweet in list_tweets:
-		username = tweet.user.screen_name
-		description = tweet.user.description
-		location = tweet.user.location
-		following = tweet.user.friends_count
-		followers = tweet.user.followers_count
-		totaltweets = tweet.user.statuses_count
-		retweetcount = tweet.retweet_count
-		hashtags = tweet.entities['hashtags']
-		
-		# Retweets can be distinguished by a retweeted_status attribute,
-		# in case it is an invalid reference, except block will be executed
-		try:
-			text = tweet.retweeted_status.full_text
-		except AttributeError:
-			text = tweet.full_text
-		hashtext = list()
-		for j in range(0, len(hashtags)):
-			hashtext.append(hashtags[j]['text'])
-		
-		# Here we are appending all the extracted information in the DataFrame
-		ith_tweet = [username, description, location, following,
-					followers, totaltweets, retweetcount, text, hashtext]
-		db.loc[len(db)] = ith_tweet
-		
-		# Function call to print tweet data on screen
-		#printtweetdata(i, ith_tweet)
-		i = i+1
-	filename = 'scraped_tweets_SayNoToVaccines.csv'
-	
-	# we will save our database as a CSV file.
-	db.to_csv(filename)
+def tweet_to_row(tweet: tweepy.Status) -> List:
+    """Convert a Tweepy Status object to a list representing one CSV row."""
+    hashtags = [h["text"] for h in tweet.entities.get("hashtags", [])]
+    try:
+        text = tweet.retweeted_status.full_text
+    except AttributeError:
+        text = tweet.full_text
+
+    return [
+        tweet.user.screen_name,
+        tweet.user.description,
+        tweet.user.location,
+        tweet.user.friends_count,
+        tweet.user.followers_count,
+        tweet.user.statuses_count,
+        tweet.retweet_count,
+        text,
+        hashtags,
+    ]
 
 
-if __name__ == '__main__':
-	
-	# Enter your own credentials obtained
-	# from your developer account
-	consumer_key = "eUuQbttkEBK1t2T4ZkUfgofD2"
-	consumer_secret = "iBbc9qykHm4UpoFlon7qYc5XPhLl3WvEla9EhCuKAwKBNzFQEn" 
-	access_key = "1351281446988738560-SM9BUh5r834xlAUQf3Lh0fZHUsHQRS"
-	access_secret = "aOPt5nOtQOxzeDrokOwyhP8omH9PQkKglqCXPH2pkgWmf"
-	auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
-	auth.set_access_token(access_key, access_secret)
-	api = tweepy.API(auth,wait_on_rate_limit=True)
-	
-	# number of tweets you want to extract in one run
-	numtweet = 1000
-	scrape(numtweet)
-	print('Scraping has completed!')
+def scrape_tweets(api: tweepy.API, query: str, limit: int) -> pd.DataFrame:
+    """Collect tweets matching *query*.
 
+    Args:
+        api: Tweepy API instance.
+        query: Search query passed to the Twitter API.
+        limit: Maximum number of tweets to retrieve.
+
+    Returns:
+        DataFrame containing information for each tweet.
+    """
+    columns = [
+        "username",
+        "description",
+        "location",
+        "following",
+        "followers",
+        "totaltweets",
+        "retweetcount",
+        "text",
+        "hashtags",
+    ]
+    cursor = tweepy.Cursor(
+        api.search, q=query, lang="en", tweet_mode="extended"
+    ).items(limit)
+
+    rows = [tweet_to_row(tweet) for tweet in cursor]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def save_to_csv(df: pd.DataFrame, filename: str) -> None:
+    """Save the DataFrame *df* to CSV format."""
+    df.to_csv(filename, index=False)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Scrape tweets for a given search query."
+    )
+    parser.add_argument(
+        "query", help="Twitter search query, e.g. '#SayNoToVaccines -filter:retweets'"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum number of tweets to collect (default: 100).",
+    )
+    parser.add_argument(
+        "--output",
+        default="scraped_tweets.csv",
+        help="Filename for the resulting CSV (default: scraped_tweets.csv).",
+    )
+    args = parser.parse_args()
+
+    api = create_api()
+    df = scrape_tweets(api, args.query, args.limit)
+    save_to_csv(df, args.output)
+    print("Scraping has completed!")
+
+
+if __name__ == "__main__":
+    main()
